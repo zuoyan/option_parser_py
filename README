@@ -1,0 +1,29 @@
+# option_parser, a command line argv parsing module
+
+## WHY another
+
+Yes, it's another wheel, with some/little differences.
+
+It follows the same design as a internal used C++ library, so i can
+avoid to be confused by argparse, esp. with the reordering. In
+option_parser, an option is just splited as (match, process,
+document). Match is first called, the process correspending to the
+highest match result is called and return the next start index.
+
+First, option_parser is simple than argparse. I don't need to
+implement any strange options(like 'ps -aux').
+
+Second, option_parser is a little more consensus than argparse. Any
+match/action can be implemented by self define functions.
+
+Third, reordering is disabled at default.
+
+## Example
+
+see
+
+    python option_parser.py --help
+
+
+
+
