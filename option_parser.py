@@ -1,3 +1,4 @@
+# coding: utf8
 # option_parser follow the design in ysid
 """
 A very general/limited option parser. For any option, we require a
@@ -55,11 +56,23 @@ import traceback
 import functools
 import inspect
 import shlex
+import os
 
 MATCH_EXACT = 1000
 MATCH_PREFIX = 100
 MATCH_POSITION = 10
 MATCH_NONE = 0
+
+if sys.version.startswith("3.1"):
+    import collections
+    def callable(f):
+        return isinstance(f, collections.Callable)
+
+def _writeln(fp, *args):
+    fp.write(" ".join(str(i) for i in args) + os.linesep)
+
+def _writeeln(*args):
+    sys.stderr.write(" ".join(str(i) for i in args) + os.linesep)
 
 class AsAttribute(object):
 
@@ -69,7 +82,10 @@ class AsAttribute(object):
     def __getattr__(self, attr):
         if hasattr(self.__obj, attr):
             return getattr(self.__obj, attr)
-        return self.__obj[attr]
+        try:
+            return self.__obj[attr]
+        except:
+            raise AttributeError
 
     def __repr__(self):
         return "AsAttribute(%s)" % (self.__obj)
@@ -430,13 +446,13 @@ class OptionParser(object):
             return lines
 
         if mesg:
-            print >>sys.stderr, mesg
-            print >>sys.stderr, ""
+            _writeeln(mesg)
+            _writeeln("")
         if self.program:
-            print >>sys.stderr, "Usage: %s [options] ..." % self.program
+            _writeeln("Usage: %s [options] ..." % self.program)
         if self.description:
-            print >>sys.stderr, self.description
-        print >>sys.stderr, ""
+            _writeeln(self.description)
+        _writeeln("")
         group_first = {}
         for i, o in enumerate(self.options):
             if not o.group in group_first:
@@ -448,7 +464,7 @@ class OptionParser(object):
                 continue
             if pre_group != o.group:
                 if o.group:
-                    print >>sys.stderr, "\n%s:" % o.group
+                    _writeeln("\n%s:" % o.group)
                 pre_group = o.group
             doc, pre = o.doc, ""
             doc, name, meta = doc.doc, doc.name, doc.meta
@@ -456,14 +472,14 @@ class OptionParser(object):
             if meta:
                 if len(name) < 23:
                     name = name + " " * (24 - len(name))
-                    print >>sys.stderr, "%s%s" % (name, meta)
+                    _writeeln("%s%s" % (name, meta))
                 else:
-                    print >>sys.stderr, "%s\n%s%s" % (name, " " * 24, meta)
+                    _writeeln("%s\n%s%s" % (name, " " * 24, meta))
             else:
-                print >>sys.stderr, "%s" % name
+                _writeeln(name)
             lines = split_lines(doc.lstrip(), self.help_width);
             for l in lines:
-                print >>sys.stderr, "%s%s" % (pre, l)
+                _writeeln("%s%s" % (pre, l))
                 pre = "\t\t\t"
         c = kargs.get("exit", 1)
         if c >= 0:
@@ -547,11 +563,11 @@ if __name__ == "__main__":
 
     def print_options():
         for o in cmd_parser.options:
-            print o
+            _writeln(sys.stdout, o)
     cmd_parser.add_option("print-options", func=print_options, group="")
 
     cmd_parser.parse_all()
 
-    print type(style), style
-    print type(value), value
-    print type(ii), ii
+    _writeln(sys.stdout, type(style), style)
+    _writeln(sys.stdout, type(value), value)
+    _writeln(sys.stdout, type(ii), ii)
