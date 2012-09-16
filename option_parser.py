@@ -49,7 +49,8 @@ cmd_parser.add_option("value",  func=lambda x:local_set("value"),
                       doc="INT::set value to that value")
 """
 
-__all__ = ["OptionParser", "MATCH_EXACT", "MATCH_PREFIX", "MATCH_POSITION", "MATCH_NONE"]
+__all__ = ["OptionParser", "MATCH_EXACT", "MATCH_PREFIX", "MATCH_POSITION", "MATCH_NONE",
+           "to_date", "to_datetime"]
 
 import sys
 import traceback
@@ -57,6 +58,7 @@ import functools
 import inspect
 import shlex
 import os
+import datetime, time
 
 MATCH_EXACT = 1000
 MATCH_PREFIX = 100
@@ -515,12 +517,73 @@ class OptionParser(object):
             argv[0] = "--" + argv[0]
             self.parse_all(0, argv)
 
+def to_date(s):
+    """convert from string to date"""
+    if not s:
+        return datetime.date.today()
+    if isinstance(s, datetime.datetime):
+        return s.date()
+    if isinstance(s, datetime.date):
+        return s
+    if isinstance(s, str) or isinstance(s, unicode):
+        if s == 'today':
+            return datetime.date.today()
+        if s == 'yesterday':
+            return datetime.date.today() - datetime.timedelta(days=1)
+        if s.startswith('+') or s.startswith('-'):
+            td = datetime.date.today()
+            if s.endswith('y') or s.endswith('Y'):
+                y, m, d = td.year - int(s[:-1]), td.month, td.day
+                while True:
+                    assert d > 0
+                    try:
+                        return datetime.date(y, m, d)
+                    except:
+                        d -= 1
+            if s.endswith('m') or s.endswith('M'):
+                y, m, d = td.year, td.month, td.day
+                dm = int(s[:-1])
+                y += (m + dm) / 12
+                m = (m + dm) % 12
+                while True:
+                    assert d > 0
+                    try:
+                        return datetime.date(y, m, d)
+                    except:
+                        d -= 1
+            if s.endswith('w') or s.endswith('W'):
+                return td + datetime.timedelta(int(s[:-1]) * 7)
+            if s.endswith('d') or s.endswith('D'):
+                return td + datetime.timedelta(int(s[:-1]))
+            return td + datetime.timedelta(int(s))
+        return datetime.date(*[int(i) for i in s.replace('.', '-').split('-')[:3]])
+    raise RuntimeError('to_date got date in invalid type %s:%s' %(type(s), s))
+    return s
+
+def to_datetime(dt):
+    """convert from string to dattime"""
+    if not dt:
+        return datetime.datetime.now()
+    if isinstance(dt, datetime.datetime):
+        return dt
+    if isinstance(dt, datetime.date):
+        return datetime.datetime.fromtimestamp(time.mktime(dt.timetuple()))
+    if isinstance(dt, str) or isinstance(dt, unicode):
+        if dt == 'today' or dt == 'yesterday' or dt.startswith('+') or dt.startswith('-'):
+            return to_datetime(to_date(dt))
+        return datetime.datetime(*[int(i) for i in re.split('[^0-9]+', dt)])
+    raise RuntimeError('to_datetime got date in invalid type %s:%s' %(type(date), date))
+    return dt
+
 if __name__ == "__main__":
     import re
     L = locals()
     cmd_parser = OptionParser(scope=L)
     style = "style"
     value = 10
+    date = datetime.date.today()
+    date_time = datetime.datetime.now()
+
     def opt_style_value(s, v):
         L["style"] = s
         L["value"] = int(v)
@@ -560,6 +623,8 @@ if __name__ == "__main__":
     cmd_parser.current_group = "var func"
     cmd_parser.add_option("ii", func=lambda ints:ii.extend(ints), var=1)
     cmd_parser.add_option("hidden-ii", func=lambda x:ii.extend(x), var=1, var_convert=int, doc=False)
+    cmd_parser.add_option("date", convert=to_date, doc="DATE::give me a date")
+    cmd_parser.add_option("date-time", convert=to_datetime, doc="DATETIME::give me a datetime")
 
     def print_options():
         for o in cmd_parser.options:
@@ -571,3 +636,5 @@ if __name__ == "__main__":
     _writeln(sys.stdout, type(style), style)
     _writeln(sys.stdout, type(value), value)
     _writeln(sys.stdout, type(ii), ii)
+    _writeln(sys.stdout, type(date), date)
+    _writeln(sys.stdout, type(date_time), date_time)
