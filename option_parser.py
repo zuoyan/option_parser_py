@@ -89,11 +89,17 @@ class AsAttribute(object):
         except:
             raise AttributeError
 
+    def __call__(self, *args, **kargs):
+        if callable(self.__obj):
+            return self.__obj(*args, **kargs)
+
     def __repr__(self):
         return "AsAttribute(%s)" % (self.__obj)
 
 def as_attribute(obj):
     if isinstance(obj, AsAttribute):
+        return obj
+    if callable(obj):
         return obj
     return AsAttribute(obj)
 
@@ -630,6 +636,11 @@ if __name__ == "__main__":
         for o in cmd_parser.options:
             _writeln(sys.stdout, o)
     cmd_parser.add_option("print-options", func=print_options, group="")
+    def with_env(x):
+        print "with_env", x
+    cmd_parser.add_option("env", func=with_env, group="")
+    cmd_parser.add_option(lambda p, idx, argv: (MATCH_EXACT if re.compile("^[^ \t]+=.*$").match(argv[idx]) else MATCH_NONE),
+                          func=with_env, with_opt=1, group="")
 
     cmd_parser.parse_all()
 
