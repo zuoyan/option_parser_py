@@ -330,6 +330,33 @@ class Parser(object):
     self.disable_groups.erase(g)
 
   def add_option(self, match, take, doc=""):
+    """This function adds a option item to the parser.
+
+    'match' can be any function from state to (priority/MatchResult,
+    state).
+
+    'match' can be a string, and in this case, we split 'match' by
+    '|', and try to match current argument to every parts.
+
+    'take' can be a Flag(store to locals of caller). If 'take' is a
+    string, we'll build a Flag with dest equal to 'take'. If take is a
+    Flag(built or given), and the dest is not set, we'll try to get
+    the dest from 'match' if it's a string. You're refered to class
+    Flag for details.
+
+    'take' can be a StateMonad, in this case, the Really Take is build
+    with MatchResult ignored.
+
+    'take' can be a general Python function, we'll build a real Take
+    who consumes the same number arguments from state as that
+    function(str only, since in Python, i think, we can't get the
+    parameters type).
+
+    'doc' can be an instance of Document. And 'doc' can be a string,
+    the pattern and description part is splited by '::'. And if
+    'match' is a string, we'll aslo set the prefix part as
+    concatenation of '--' and 'match'.
+    """
     match_o = match
     if isinstance(match, str):
       match = str_match(match)
