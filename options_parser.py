@@ -29,8 +29,10 @@ value = 20
 parser.add_option("value", int, "INT::integer value")
 # '--value 10' will set value to 10
 
-parser.add_option("VALUE", Flag(dest="value", convert=lambda x: int(x) * 10),
-                 "INT::set value to 10 times")
+parser.add_option(
+  "VALUE",
+  value().apply(lambda x: int(x) * 10).bind(Flag(dest="value")),
+  "INT::set value to 10 times")
 # '--VALUE 10' will set value to 100
 
 L = locals()
@@ -298,18 +300,25 @@ def str_match(s):
     return MatchResult(MATCH_NO, old_state), State(mpos, argv)
   return func
 
-class Flag(object):
-  def __init__(self, dest=None, scope=None, convert=None, nargs=None):
+def _getscope(index):
+  L = None
+  stack = inspect.stack()
+  try:
+    L = stack[index][0].f_locals
+  finally:
+    del stack
+  return L
+
+class Flag(StateMonad):
+  def __init__(self, dest=None, scope=None):
     self.dest = dest
     self.scope = scope
-    self.convert = convert
-    self.nargs = nargs
-    if self.nargs is None:
-      try:
-        p = inspect.getargspec(convert)
-        self.nargs = len(p[0])
-      except:
-        self.nargs = 1
+    if scope is None:
+      self.scope = _getscope(2)
+
+  def func(self, v):
+    self.scope[self.dest] = v
+    return StateMonad.wrap(None)
 
 class Parser(object):
 
@@ -338,11 +347,11 @@ class Parser(object):
     'match' can be a string, and in this case, we split 'match' by
     '|', and try to match current argument to every parts.
 
-    'take' can be a Flag(store to locals of caller). If 'take' is a
-    string, we'll build a Flag with dest equal to 'take'. If take is a
-    Flag(built or given), and the dest is not set, we'll try to get
-    the dest from 'match' if it's a string. You're refered to class
-    Flag for details.
+    'take' can be a Flag(store to to given scope, the default scope is
+    the caller's locals). If 'take' is a string, we'll build a Flag
+    with dest equal to 'take'. If take is a Flag(built or given), and
+    the dest is not set, we'll try to get the dest from 'match' if
+    it's a string. You're refered to class Flag for details.
 
     'take' can be a StateMonad, in this case, the Really Take is build
     with MatchResult ignored.
@@ -367,27 +376,19 @@ class Parser(object):
     elif isinstance(doc, str):
       pattern, desc = doc.split("::", 1)
       doc = Document("", pattern, desc)
-    locals_ = None
-    stack = inspect.stack()
-    try:
-      locals_ = stack[1][0].f_locals
-    finally:
-      del stack
-    if take == Flag: take = Flag()
-    if isinstance(take, str):
-      take = Flag(dest=take)
+    locals_ = _getscope(2)
+    if isinstance(match_o, str):
+      match_dest = match_o.split("|")[-1].replace("-", "_")
     if isinstance(take, type):
-      take = Flag(convert=take)
+      if not match_dest:
+        raise RuntimeError("can't get dest")
+      take = value(convert=take).bind(Flag(dest=match_dest, scope=locals_))
     if isinstance(take, Flag):
-      flag = take
-      if not flag.scope: flag.scope = locals_
-      if not flag.dest and isinstance(match_o, str):
-        flag.dest = match_o.split("|")[-1].replace("-", "_")
-      if not flag.convert: flag.convert = str
-      if not flag.dest:
-        raise RuntimeError("no dest for flag")
-      take = value().times(flag.nargs).vapply(flag.convert).apply(
-          lambda v: flag.scope.__setitem__(flag.dest, v))
+      if take.dest is None:
+        if not match_dest:
+          raise RuntimeError("can't get dest")
+        take.dest = match_dest
+      take = value().bind(take)
     if isinstance(take, StateMonad):
       t = take
       take = Take(lambda mr, s: t(s))
@@ -555,13 +556,13 @@ if __name__ == "__main__":
                     gather(value(), value()).vapply(print_ab),
                     "A B::print a and b")
   parser.add_option("set-f",
-                    Flag(dest="f", convert=lambda x: bool(int(x))),
+                    value(convert=lambda x:bool(int(x))).bind(Flag(dest="f")),
                     "BOOL::set f")
   parser.add_option("f-true",
-                    Flag(dest="f", convert=lambda: True),
+                    Take(lambda mr, state: (local_set("f", True), state)),
                     "set f to true")
   parser.add_option("f-false",
-                    Flag(dest="f", convert=lambda: False),
+                    Take(lambda mr, state: (local_set("f", False), state)),
                     "set f to false")
   parser.add_option(
       "f|no-f",
