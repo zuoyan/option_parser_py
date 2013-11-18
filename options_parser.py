@@ -10,7 +10,7 @@ state, and we'll call the match of every option. But we only call the
 take part of the one with greatest priority. The take is a (not pure)
 function from (match-result, state) to (take-result, state). When
 take-result is not None, it should be true, otherwise indicating
-failure. Document has three parts, prefix, pattern and description.
+failure. Document has two parts, prefix and description.
 
 Construction of match from string is provided for convenience. For
 example, 'file|in-file' is a match with option '--file' or
@@ -41,14 +41,14 @@ def local_set(n, v):
 parser.add_option(
   value().apply(lambda v: re.match("^[0-9]+$", v) and MATCH_POSITION),
   Take(lambda mr, state: (local_set("value", int(mr.match_arg())), state)),
-  Document("INT", "", "set int value"))
+  Document("INT", "set int value"))
 # '1234' will set value to 1234, where options_parser.value is a state
 # monad(a function from state to (x, state), x is any type).
 
 parser.add_option(
   value().apply(lambda v: re.match("^-+value-[0-9]+$", v) and MATCH_UNIQUE),
   Take(lambda mr, state: (local_set("value", int(mr.match_arg()[6:])), state)),
-  Document("--value-[0-9]+", "", "set int value"))
+  Document("--value-[0-9]+", "set int value"))
 # '--value-5678' will set value to 5678
 """
 
@@ -275,9 +275,8 @@ class Item(object):
     self.active = True
 
 class Document(object):
-  def __init__(self, prefix, pattern, desc):
+  def __init__(self, prefix, desc):
     self.prefix = prefix
-    self.pattern = pattern
     self.desc = desc
 
 def str_match(s):
@@ -362,20 +361,16 @@ class Parser(object):
     parameters type).
 
     'doc' can be an instance of Document. And 'doc' can be a string,
-    the pattern and description part is splited by '::'. And if
-    'match' is a string, we'll aslo set the prefix part as
-    concatenation of '--' and 'match'.
+    just the description. And if 'match' is a string, we'll aslo set
+    the prefix part as concatenation of '--' and 'match'.
     """
     match_o = match
     if isinstance(match, str):
       match = str_match(match)
     if isinstance(doc, str) and isinstance(match_o, str):
-      if not "::" in doc: doc = "::" + doc
-      pattern, desc = doc.split("::", 1)
-      doc = Document("--" + match_o, pattern, desc)
+      doc = Document("--" + match_o, desc)
     elif isinstance(doc, str):
-      pattern, desc = doc.split("::", 1)
-      doc = Document("", pattern, desc)
+      doc = Document("", desc)
     locals_ = _getscope(2)
     if isinstance(match_o, str):
       match_dest = match_o.split("|")[-1].replace("-", "_")
@@ -453,7 +448,7 @@ class Parser(object):
 
   def help_message(self, line_width=80):
     hm = ""
-    pattern_off = 20
+    if len(self.desc): hm = self.desc + "\n\n"
     desc_off = 20
     def next_pos(s, off):
       n = s.find("\n", off)
@@ -480,13 +475,6 @@ class Parser(object):
       return lines
     for i in self.items:
       line = i.doc.prefix
-      if len(line) >= pattern_off and i.doc.pattern:
-        hm += line + "\n"
-        line = ""
-      if i.doc.pattern:
-        line += " " * (pattern_off - len(line))
-        hm += line + i.doc.pattern + "\n"
-        line = ""
       desc = i.doc.desc
       if len(line) >= desc_off and desc:
         hm += line + "\n"
