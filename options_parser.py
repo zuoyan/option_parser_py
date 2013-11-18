@@ -321,9 +321,9 @@ class Flag(StateMonad):
 
 class Parser(object):
 
-  def __init__(self, parent, desc):
-    self.parent = parent
+  def __init__(self, desc, parent=None):
     self.desc = desc
+    self.parent = parent
     self.current_group = ""
     self.items = []
     self.disable_groups = {}
@@ -337,7 +337,7 @@ class Parser(object):
   def enable_group(g):
     self.disable_groups.erase(g)
 
-  def add_option(self, match, take, doc=""):
+  def add_option(self, match, take, doc="", prefix=None):
     """This function adds a option item to the parser.
 
     'match' can be any function from state to (priority/MatchResult,
@@ -367,10 +367,10 @@ class Parser(object):
     match_o = match
     if isinstance(match, str):
       match = str_match(match)
-    if isinstance(doc, str) and isinstance(match_o, str):
-      doc = Document("--" + match_o, desc)
-    elif isinstance(doc, str):
-      doc = Document("", desc)
+    if isinstance(doc, str) and isinstance(match_o, str) and prefix is None:
+      prefix = "--" + match_o
+    if isinstance(doc, str):
+      doc = Document(prefix or "", doc)
     locals_ = _getscope(2)
     if isinstance(match_o, str):
       match_dest = match_o.split("|")[-1].replace("-", "_")
@@ -451,36 +451,39 @@ class Parser(object):
     if len(self.desc): hm = self.desc + "\n\n"
     desc_off = 20
     def next_pos(s, off):
-      n = s.find("\n", off)
-      if n == -1: n = len(s)
       space = off
       while space < len(s):
         if s[space].isspace(): break
         space += 1
       return space
-    def split_desc(desc, width):
+    def split_line(s, width):
       lines = []
-      while len(desc) >= width:
+      while len(s) >= width:
         i = 0
-        while i < len(desc):
-          n = next_pos(desc, i + 1)
-          if n > width or n >= len(desc):
+        while i < len(s):
+          n = next_pos(s, i + 1)
+          if n > width or n >= len(s):
             if i == 0: i = n
             break
           i = n
-          if desc[n] == "\n": break
-        lines.append(desc[:i])
-        desc = desc[i + 1:]
-      if desc: lines.append(desc)
+        lines.append(s[:i])
+        s = s[i + 1:]
+      if len(s): lines.append(s)
+      return lines
+    def split_desc(desc, width):
+      lines = []
+      for line in desc.split("\n"):
+        lines.extend(split_line(line, width))
       return lines
     for i in self.items:
       line = i.doc.prefix
       desc = i.doc.desc
+      if not len(line) and not len(desc): continue
       if len(line) >= desc_off and desc:
         hm += line + "\n"
         line = ""
       if desc:
-        line += " " * (desc_off - len(line))
+        if line: line += (" " * (desc_off - len(line)))
         lines = split_desc(desc, line_width - desc_off)
         for l in lines:
           if line:
@@ -498,7 +501,7 @@ PARSER = None
 def check_init():
   global PARSER
   if not PARSER:
-    PARSER = Parser(None, "default options parser")
+    PARSER = Parser("default options parser")
 
 def add_option(match, take, doc):
   check_init()
@@ -529,23 +532,23 @@ if __name__ == "__main__":
   L = locals()
   def local_set(dest, v):
     L[dest] = v
-  parser = Parser(None, "naive")
+  parser = Parser("naive options parser as every options splited as MATCH, TAKE, DOCUMENT.")
   parser.add_help()
-  parser.add_option("a", int, "INT::integer")
-  parser.add_option("a-str", str, "STR::str and very long description of help message.")
-  parser.add_option("num", int, "INT::number")
+  parser.add_option("a", int, "INT\ninteger")
+  parser.add_option("a-str", str, "STR\nstr and very long description of help message.")
+  parser.add_option("num", int, "INT\nnumber")
   parser.add_option("vs",
                     container(str).apply(lambda xs: vs.extend(xs)),
-                    "STR+::every item is append to vs")
+                    "STR+\nevery item is append to vs")
   parser.add_option("sep-vs",
                     value().bind(sep_container(str)).apply(lambda xs: vs.extend(xs)),
-                    "SEP STR+ SEP::every item is append to vs")
+                    "SEP STR+ SEP\nevery item is append to vs")
   parser.add_option("func-ab",
                     gather(value(), value()).vapply(print_ab),
-                    "A B::print a and b")
+                    "A B\nprint a and b")
   parser.add_option("set-f",
                     value(convert=lambda x:bool(int(x))).bind(Flag(dest="f")),
-                    "BOOL::set f")
+                    "BOOL\nset f")
   parser.add_option("f-true",
                     Take(lambda mr, state: (local_set("f", True), state)),
                     "set f to true")
@@ -560,11 +563,11 @@ if __name__ == "__main__":
   parser.add_option(
       value().apply(lambda v: re.match("^[0-9]+$", v) and MATCH_POSITION),
       Take(lambda mr, state: (local_set("a", int(mr.match_arg())), state)),
-      Document("INT", "", "set int value"))
+      Document("INT", "set int value"))
   parser.add_option(
       value().apply(lambda v: re.match("^-+value-[0-9]+$", v) and MATCH_UNIQUE),
       Take(lambda mr, state: (local_set("a", int(mr.match_arg()[6:])), state)),
-      Document("--value-[0-9]+", "", "set int value"))
+      Document("--value-[0-9]+", "set int value"))
   def clear(L):
     while L: L.remove(L[0])
   parser.add_option(
@@ -574,7 +577,9 @@ if __name__ == "__main__":
   parser.add_option(
       lambda state: (MatchResult(0, state), state),
       None,
-      Document("", "", "only for help message"))
+      Document("help message", "Not a option, just print a help message. This"
+               " test very long help message. A very long message should be"
+               " splited and formated to fixed width"))
   r, state = parser.parse()
   print r, state
   print a, type(a)
