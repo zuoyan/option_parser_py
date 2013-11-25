@@ -23,7 +23,7 @@ part of match string.
 Example:
 
 import options_parser
-parser = options_parser.Parser(None, "description")
+parser = options_parser.Parser("description")
 parser.add_help()
 value = 20
 parser.add_option("value", int, "INT::integer value")
@@ -294,7 +294,7 @@ def str_match(s):
       if arg == m:
         return MatchResult(MATCH_UNIQUE, old_state), State(mpos, argv)
     for m in ms:
-      if m.startswith(arg):
+      if m.startswith(arg) and len(arg):
         return MatchResult(MATCH_PREFIX, old_state), State(mpos, argv)
     return MatchResult(MATCH_NO, old_state), State(mpos, argv)
   return func
@@ -321,21 +321,31 @@ class Flag(StateMonad):
 
 class Parser(object):
 
-  def __init__(self, desc, parent=None):
+  def __init__(self, desc):
     self.desc = desc
-    self.parent = parent
     self.current_group = ""
     self.items = []
     self.disable_groups = {}
+    self.parsers = {}
+    self.add_parser(self, 0)
+    self.active = True
 
-  def at_group(g):
+  def at_group(self, g):
     self.current_group = g
 
-  def disable_group(g):
+  def disable_group(self, g):
     self.disable_groups.add(g)
 
-  def enable_group(g):
+  def enable_group(self, g):
     self.disable_groups.erase(g)
+
+  def toggle(self):
+    self.active = not self.active
+
+  def add_parser(self, parser, priority=0):
+    if not priority in self.parsers:
+      self.parsers[priority] = []
+    self.parsers[priority].append(parser)
 
   def add_option(self, match, take, doc="", prefix=None):
     """This function adds a option item to the parser.
@@ -401,17 +411,26 @@ class Parser(object):
     return item
 
   def match_results(self, state):
-    r = []
-    for i in self.items:
-      if i.group in self.disable_groups: continue
-      if not i.active: continue
-      mr, ms = i.match(state)
-      if not isinstance(mr, MatchResult):
-        mr = MatchResult(mr, state)
-      r.append((mr, ms, i))
-    if self.parent:
-      r = r + self.parent.match_results(state)
-    return r
+    results = []
+    if not self.active: return results
+    for p, parsers in self.parsers.iteritems():
+      for parser in parsers:
+        l = []
+        if parser != self:
+          l = parser.match_results(state)
+        else:
+          for i in self.items:
+            if i.group in self.disable_groups: continue
+            if not i.active: continue
+            mr, ms = i.match(state)
+            if not isinstance(mr, MatchResult):
+              mr = MatchResult(mr, state)
+            if not mr.priority: continue
+            l.append((mr, ms, i))
+        results.extend([(p, i) for i in l])
+    results.sort(key=lambda x:-x[0])
+    if not len(results): return results
+    return [r for p, r in results if p == results[0][0]]
 
   def parse(self, argv=None, pos=None):
     "return status, position"
@@ -446,7 +465,14 @@ class Parser(object):
       quit()
     self.add_option(match, help_func, "print help message")
 
-  def help_message(self, line_width=80):
+  def help_message(self, line_width=80, caller=None):
+    if caller != self:
+      hms = []
+      for p, parsers in self.parsers.iteritems():
+        for parser in parsers:
+          hms.append((p, parser.help_message(line_width, self)))
+      hms.sort(key=lambda x: x[0])
+      return "\n".join([m for _, m in hms])
     hm = ""
     if len(self.desc): hm = self.desc + "\n\n"
     desc_off = 20
@@ -580,6 +606,18 @@ if __name__ == "__main__":
       Document("help message", "Not a option, just print a help message. This"
                " test very long help message. A very long message should be"
                " splited and formated to fixed width"))
+  sub = Parser("sub")
+  sub.toggle()
+  def sub_print(a):
+    print "sub arg", a
+  sub.add_option("a", Take.from_func(sub_print), "ARG::arg print")
+  sub.add_option("b", Take.from_func(sub_print), "ARG::arg print")
+  parser.add_option(value().apply(lambda s: s == "sub" and MATCH_UNIQUE or MATCH_NO),
+                    Take.from_func(lambda: sub.toggle()), "toggle active sub")
+  sub.add_option(value().apply(lambda s: s == '--' and MATCH_UNIQUE or MATCH_NO),
+                 Take.from_func(lambda: sub.toggle()),
+                 "disable sub", prefix="--")
+  parser.add_parser(sub, 1)
   r, state = parser.parse()
   print r, state
   print a, type(a)
