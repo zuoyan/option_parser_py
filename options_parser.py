@@ -1,24 +1,21 @@
 # coding: utf-8
 # options_parser, a state monad approach, refactor-ed from ysid
 
-"""
-A very general/limited options parser. We view option as three parts,
-match, take and document. The match is a function from state(combined
-by the position, index and offset in argv, and argv) to tuple of
-priority and new state. Every match should not change the program
-state, and we'll call the match of every option. But we only call the
-take part of the one with greatest priority. The take is a (not pure)
-function from (match-result, state) to (take-result, state). When
-take-result is not None, it should be true, otherwise indicating
-failure. Document has two parts, prefix and description.
+"""A very general/limited options parser. We view option as three parts, match,
+take and document. The match is a function from state(combined by the position,
+index and offset in argv, and argv) to tuple of priority and new state. Every
+match should not change the program state, and we'll call the match of every
+option. But we only call the take part of the one with greatest priority. The
+take is a (not pure) function from match-result to take-result. When error of
+take-result is not None, it's indicating failure message. Document has two
+parts, prefix and description.
 
-Construction of match from string is provided for convenience. For
-example, 'file|in-file' is a match with option '--file' or
-'--in-file'. And this match also accept prefix match with lower
-priority.
+Construction of match from string is provided for convenience. For example, '-f
+<file> --in-file FILE', or '-f, --in-file FILE' is a match with option '-f' or
+'--in-file'. And this match also accept prefix with lower priority.
 
-Take can be a type, which acted as a converter, and the dest is last
-part of match string.
+Take can be a type, which acted as a converter, and the dest is last part of the
+match options.
 
 Example:
 
@@ -40,16 +37,17 @@ def local_set(n, v):
   L[n] = v
 parser.add_option(
   value().apply(lambda v: re.match("^[0-9]+$", v) and MATCH_POSITION),
-  Take(lambda mr, state: (local_set("value", int(mr.match_arg())), state)),
+  Take(lambda mr: TakeResult(_=local_set("value", int(mr.match_arg())), state=mr.state)),
   Document("INT", "set int value"))
 # '1234' will set value to 1234, where options_parser.value is a state
 # monad(a function from state to (x, state), x is any type).
 
 parser.add_option(
-  value().apply(lambda v: re.match("^-+value-[0-9]+$", v) and MATCH_UNIQUE),
-  Take(lambda mr, state: (local_set("value", int(mr.match_arg()[6:])), state)),
+  value().apply(lambda v: re.match("^-+value-[0-9]+$", v) and MATCH_EXACT),
+  Take(lambda mr: TakeResult(_=local_set("value", int(mr.match_arg()[6:])), state=mr.state)),
   Document("--value-[0-9]+", "set int value"))
 # '--value-5678' will set value to 5678
+
 """
 
 import sys
@@ -65,6 +63,162 @@ class Position(object):
 
   def __cmp__(self, o):
     return cmp((self.index, self.off), (o.index, o.off))
+
+class Circumstance(object):
+  pass
+
+class State(object):
+  def __init__(self, pos, argv, circumstance=None):
+    self.pos = pos
+    self.argv = argv
+    self.circumstance = circumstance or Circumstance()
+
+  def __repr__(self):
+    s = []
+    for i, a in enumerate(self.argv):
+      if i == self.pos.index:
+        o = self.pos.off
+        s.append(a[:o] + "|" + a[o:])
+      else:
+        s.append(a)
+    return "[" + (", ".join(s)) + "]"
+
+MATCH_NO = 0
+MATCH_POSITION = 10
+MATCH_PREFIX = 1000
+MATCH_EXACT = 10000
+
+class MatchResult(object):
+  def __init__(self, **kwds):
+    self.priority = kwds.get("priority", None)
+    self.state = kwds.get("state", None)
+    self.start = kwds.get("start", None)
+
+  def match_arg(self):
+    return get_match_arg(self.start.pos, self.start.argv)
+
+class TakeResult(object):
+  def __init__(self, **kwds):
+    self.state = kwds.get("state", None)
+    self.error = kwds.get("error", None)
+
+class MatchFromDescription(object):
+  def desc_split(self, s):
+    ret = []
+    s = s.strip()
+    while s:
+      c = s[0]
+      if c.isspace():
+        s = s.strip()
+        continue
+      if c == ',':
+        s = s[1:]
+        continue
+      if c == '[':
+        ret.append(c)
+        s = s[1:].lstrip(" =")
+        continue
+      if c == ']':
+        ret.append(c)
+        s = s[1:]
+        continue
+      if c == '-':
+        if len(s) > 1 and s[1] != '-':
+          ret.append(s[:2])
+          s = s[2:].lstrip(" =")
+          continue
+        w = ""
+        for c in s:
+          if c in " [=": break
+          w += c
+        ret.append(w)
+        s = s[len(w):].lstrip("[")
+        continue
+      if s == '<':
+        w, s = s.split('>', 1)
+        ret.append(w)
+        s = s.strip()
+        continue
+      w, s = (s.split(" ", 1) + [""])[:2]
+      ret.append(w)
+    return ret
+
+  def __init__(self, doc):
+    self.num_args = 0;
+    self.is_arg_optional = 0
+    self.is_raw = 0
+    self.doc = doc
+    self.name = ""
+    self.opts = []
+    doc = doc.strip()
+    if not doc.startswith("-"):
+      self.init_not_doc()
+      return
+    vs = self.desc_split(doc)
+    self.is_arg_optional = "[" in vs
+    vs = [i for i in vs if i != "[" and i != "]"]
+    for v in vs:
+      if v.startswith("-"):
+        self.opts.append(v.lstrip("-"))
+        na = 0
+        continue
+      na += 1
+      if na > self.num_args: self.num_args = na
+    if self.opts:
+      self.name = self.opts[-1]
+
+  def __repr__(self):
+    return "MatchFromDescription(name=%s, opts=%s, doc=%s, is_raw=%s, num_args=%s, is_arg_optional=%s)" % (
+        self.name, self.opts, self.doc, self.is_raw, self.num_args, self.is_arg_optional)
+
+  def init_not_doc(self):
+    if self.doc.startswith("|"):
+      self.is_raw = true;
+      self.opts = split(doc.substr(1), "|");
+      if self.opts: self.name = self.opts[-1]
+      self.doc = ", ".join(self.opts)
+      return
+    self.opts = self.doc.split("|");
+    if self.opts: self.name = self.opts[-1]
+    self.doc = ""
+    for o in self.opts:
+      if self.doc: self.doc += ", ";
+      self.doc += (len(o) == 1 and "-" or "--") + o;
+
+  def match(self, s):
+    mr = MatchResult()
+    mr.priority = 0
+    arg, np = get_match_arg(s.pos, s.argv)
+    mr.start = s;
+    mr.state = State(np, s.argv, s.circumstance)
+    if not arg: return mr
+    first_arg, _ = get_arg(Position(s.pos.index, 0), s.argv)
+    if self.is_raw or (s.pos.off == 0 and first_arg.startswith("--")):
+      for o in self.opts:
+        if o == arg:
+          mr.priority = MATCH_EXACT
+          return mr
+    if arg and s.pos.off == 0 and not self.is_raw and first_arg.startswith("--"):
+      for o in self.opts:
+        if len(arg) < len(o) and o[:len(arg)] == arg:
+          mr.priority = MATCH_PREFIX
+          return mr
+    if self.is_raw: return mr
+    if arg and not first_arg.startswith("--"):
+      for o in self.opts:
+        if len(o) != 1: continue
+        if arg[0] != o: continue
+        mr.priority = MATCH_EXACT
+        off = s.pos.off
+        if off == 0 and off < len(first_arg) and first_arg[off] == '-': off += 1
+        off += 1
+        if off < len(first_arg):
+          mr.state.pos.index = s.pos;
+          mr.state.pos.off = off;
+          if first_arg[off] == '=':
+            mr.state.pos.off += 1
+        return mr
+    return mr
 
 def safe_get(a, i, dft=None):
   if i < len(a): return a[i]
@@ -103,26 +257,6 @@ def get_match_arg(pos, argv):
     return argv[index][off:stop], np
   return None, np
 
-MATCH_NO = 0
-MATCH_POSITION = 10
-MATCH_PREFIX = 1000
-MATCH_UNIQUE = 10000
-
-class State(object):
-  def __init__(self, pos, argv):
-    self.pos = pos
-    self.argv = argv
-
-  def __repr__(self):
-    s = []
-    for i, a in enumerate(self.argv):
-      if i == self.pos.index:
-        o = self.pos.off
-        s.append(a[:o] + "|" + a[o:])
-      else:
-        s.append(a)
-    return "[" + (", ".join(s)) + "]"
-
 # this is *not* a general monad implementation
 class Monad(object):
   "Common methods of Monad, based on bind and wrap"
@@ -133,6 +267,9 @@ class Monad(object):
 
   def vapply(self, func):
     return self.apply(lambda v: func(*v))
+
+  def list_apply(self, func):
+    return self.apply(lambda v: [func(i) for i in v])
 
   def many(self):
     def f(v_vs):
@@ -211,7 +348,7 @@ def value(convert=str, noopt=False, pre_check=None, post_check=None):
       return v, State(pos, argv)
     if post_check and not post_check(v):
       return None, State(pos, argv)
-    return v, State(np, argv)
+    return v, State(np, argv, state.circumstance)
   return StateMonad(func)
 
 def container(convert=str, pre_check=None, post_check=None):
@@ -243,8 +380,8 @@ class Take(object):
     if isinstance(func, Take):
       self.func = func.func
 
-  def __call__(self, match_result, state):
-    return self.func(match_result, state)
+  def __call__(self, match_result):
+    return self.func(match_result)
 
   @classmethod
   def from_func(cls, func, nargs=None):
@@ -253,51 +390,42 @@ class Take(object):
       if p[1] or p[2]:
         raise RuntimeError("varargs and keywords not supported")
       nargs = len(p[0])
-    return value().times(nargs).vapply(func)
+    return cls.from_value(value().times(nargs).vapply(func))
 
-class MatchResult(object):
-  def __init__(self, priority, state):
-    self.priority = priority
-    self.state = state
+  @classmethod
+  def from_value(cls, v):
+    def func(mr):
+      _, s = v(mr.state)
+      tr = TakeResult()
+      tr.state = s
+      return tr
+    return Take(func)
 
-  def __cmp__(self, o):
-    return cmp(self.priority, o.priority)
+class Match(object):
+  def __init__(self, func):
+    self.func = func
+    if isinstance(func, Match):
+      self.func = func.func
 
-  def match_arg(self):
-    return get_match_arg(self.state.pos, self.state.argv)[0]
+  def __call__(self, state):
+    ret = self.func(state)
+    if isinstance(ret, MatchResult): return ret
+    if isinstance(ret, tuple):
+      p, s = ret
+      return MatchResult(state=s, priority=p, start=state)
+    raise RuntimeError("invalid match ...")
 
 class Item(object):
-  def __init__(self, match, take, doc, grp):
+  def __init__(self, match, take, doc):
     self.match = match
     self.take = take
     self.doc = doc
-    self.group = grp
     self.active = True
 
 class Document(object):
   def __init__(self, prefix, desc):
     self.prefix = prefix
     self.desc = desc
-
-def str_match(s):
-  ms = s.split("|")
-  def func(state):
-    old_state = State(state.pos, state.argv)
-    pos, argv = state.pos, state.argv
-    assert pos.index < len(argv)
-    if pos.off == 0 and safe_get(argv[pos.index], 0) != '-':
-      return MatchResult(MATCH_NO, old_state), state
-    arg, mpos = get_match_arg(pos, argv)
-    if arg is None:
-      return MatchResult(MATCH_NO, old_state), State(mpos, argv)
-    for m in ms:
-      if arg == m:
-        return MatchResult(MATCH_UNIQUE, old_state), State(mpos, argv)
-    for m in ms:
-      if m.startswith(arg) and len(arg):
-        return MatchResult(MATCH_PREFIX, old_state), State(mpos, argv)
-    return MatchResult(MATCH_NO, old_state), State(mpos, argv)
-  return func
 
 def _getscope(index):
   L = None
@@ -323,21 +451,10 @@ class Parser(object):
 
   def __init__(self, desc):
     self.desc = desc
-    self.current_group = ""
     self.items = []
-    self.disable_groups = {}
     self.parsers = {}
     self.add_parser(self, 0)
     self.active = True
-
-  def at_group(self, g):
-    self.current_group = g
-
-  def disable_group(self, g):
-    self.disable_groups.add(g)
-
-  def enable_group(self, g):
-    self.disable_groups.erase(g)
 
   def toggle(self):
     self.active = not self.active
@@ -347,7 +464,7 @@ class Parser(object):
       self.parsers[priority] = []
     self.parsers[priority].append(parser)
 
-  def add_option(self, match, take, doc="", prefix=None):
+  def add_option(self, match, take, doc="", prefix=None, scope_add=0):
     """This function adds a option item to the parser.
 
     'match' can be any function from state to (priority/MatchResult,
@@ -372,41 +489,41 @@ class Parser(object):
 
     'doc' can be an instance of Document. And 'doc' can be a string,
     just the description. And if 'match' is a string, we'll aslo set
-    the prefix part as concatenation of '--' and 'match'.
+    the prefix as match
     """
     match_o = match
+    mfd = None
     if isinstance(match, str):
-      match = str_match(match)
-    if isinstance(doc, str) and isinstance(match_o, str) and prefix is None:
-      prefix = "--" + match_o
+      mfd = MatchFromDescription(match)
+      match = mfd.match
+    if isinstance(doc, str) and mfd and prefix is None:
+      prefix = mfd.doc
     if isinstance(doc, str):
       doc = Document(prefix or "", doc)
-    locals_ = _getscope(2)
-    if isinstance(match_o, str):
-      match_dest = match_o.split("|")[-1].replace("-", "_")
+    locals_ = _getscope(2 + scope_add)
+    if mfd:
+      match_dest = mfd.name.replace("-", "_")
     if isinstance(take, type):
       if not match_dest:
         raise RuntimeError("can't get dest")
-      take = value(convert=take).bind(Flag(dest=match_dest, scope=locals_))
+      take = Take.from_value(value(convert=take).bind(Flag(dest=match_dest, scope=locals_)))
     if isinstance(take, Flag):
       if take.dest is None:
         if not match_dest:
           raise RuntimeError("can't get dest")
         take.dest = match_dest
-      take = value().bind(take)
+      take = Take.from_value(value().bind(take))
     if isinstance(take, StateMonad):
-      t = take
-      take = Take(lambda mr, s: t(s))
+      take = Take.from_value(take)
     if take is not None and not isinstance(take, Take):
       take_inspect = inspect.getargspec(take)
       if len(take_inspect[0]) == 1 and not take_inspect[1] and not take_inspect[2]:
-        t = take
-        take = Take(lambda mr, s: t(s))
-      elif len(take_inspect[0]) == 2 and not take_inspect[1] and not take_inspect[2]:
         take = Take(take)
       else:
         raise RuntimeError("unsupported take %s(of type %s)" % (take, type(take)))
-    item = Item(match, take, doc, self.current_group)
+    if not isinstance(match, Match):
+      match = Match(match)
+    item = Item(match, take, doc)
     self.items.append(item)
     return item
 
@@ -420,47 +537,41 @@ class Parser(object):
           l = parser.match_results(state)
         else:
           for i in self.items:
-            if i.group in self.disable_groups: continue
             if not i.active: continue
-            mr, ms = i.match(state)
-            if not isinstance(mr, MatchResult):
-              mr = MatchResult(mr, state)
-            if not mr.priority: continue
-            l.append((mr, ms, i))
-        results.extend([(p, i) for i in l])
-    results.sort(key=lambda x:-x[0])
-    if not len(results): return results
-    return [r for p, r in results if p == results[0][0]]
+            mr = i.match(state)
+            assert isinstance(mr, MatchResult)
+            if mr.priority <= 0: continue
+            l.append((mr, i))
+        results += l
+    return results
 
-  def parse(self, argv=None, pos=None):
+  def parse(self, argv=None, pos=None, circumstance=None):
     "return status, position"
     if argv is None: argv = sys.argv[1:]
     if isinstance(argv, State):
       state = argv
     else:
       if not pos: pos = Position(0, 0)
-      state = State(pos, argv)
-    state = State(state.pos, state.argv)
+      state = State(pos, argv, circumstance)
+    state = State(state.pos, state.argv, state.circumstance)
     while state.pos.index < len(state.argv):
       match_results = self.match_results(state)
-      match_results = [i for i in match_results if i[0].priority > 0]
-      match_results.sort(cmp=lambda x, y: cmp(y[0], x[0]))
+      mp = max(max(mr.priority for mr, item in match_results), 1) if match_results else 1
+      match_results = [(mr, item) for mr, item in match_results if mr.priority == mp]
       if not match_results:
         return "unmatch", state
-      if len(match_results) >= 2 and match_results[0][0] == match_results[1][0]:
+      if len(match_results) >= 2:
         return "multi-match", state
-      match_result, match_state, item = match_results[0]
-      take_result, take_state = item.take(match_result, match_state)
-      if take_result is None:
-        pass
-      elif not take_result:
-        return "failed", state
-      state = take_state
+      match_result, item = match_results[0]
+      take_result = item.take(match_result)
+      if take_result.error is not None:
+        return "take-error: %s" % take_result.error, take_result.state
+      state = take_result.state
     return True, state
 
   def add_help(self, match=None):
-    if not match: match = "h|help"
-    def help_func(mr, state):
+    if not match: match = "-h, --help"
+    def help_func(mr):
       print >>sys.stderr, self.help_message()
       quit()
     self.add_option(match, help_func, "print help message")
@@ -531,7 +642,7 @@ def check_init():
 
 def add_option(match, take, doc):
   check_init()
-  return PARSER.add_option(match, take, doc)
+  return PARSER.add_option(match, take, doc, scope_add=1)
 
 def add_help(match=None):
   check_init()
@@ -560,49 +671,46 @@ if __name__ == "__main__":
     L[dest] = v
   parser = Parser("naive options parser as every options splited as MATCH, TAKE, DOCUMENT.")
   parser.add_help()
-  parser.add_option("a", int, "INT\ninteger")
-  parser.add_option("a-str", str, "STR\nstr and very long description of help message.")
-  parser.add_option("num", int, "INT\nnumber")
-  parser.add_option("vs",
+  parser.add_option("-a INT", int, "integer")
+  parser.add_option("--a-str STR", str, "str and very long description of help message.")
+  parser.add_option("--num NUM", int, "number")
+  parser.add_option("--vs <str>...",
                     container(str).apply(lambda xs: vs.extend(xs)),
-                    "STR+\nevery item is append to vs")
-  parser.add_option("sep-vs",
+                    "every item is append to vs")
+  parser.add_option("--sep-vs <sep> <str>... <sep>",
                     value().bind(sep_container(str)).apply(lambda xs: vs.extend(xs)),
-                    "SEP STR+ SEP\nevery item is append to vs")
-  parser.add_option("func-ab",
+                    "every item is append to vs")
+
+  parser.add_option("--func-ab A B",
                     gather(value(), value()).vapply(print_ab),
-                    "A B\nprint a and b")
-  parser.add_option("set-f",
+                    "print a and b")
+  parser.add_option("--set-f",
                     value(convert=lambda x:bool(int(x))).bind(Flag(dest="f")),
-                    "BOOL\nset f")
-  parser.add_option("f-true",
-                    Take(lambda mr, state: (local_set("f", True), state)),
+                    "set f")
+  parser.add_option("--f-true",
+                    Take.from_func(lambda: local_set("f", True)),
                     "set f to true")
-  parser.add_option("f-false",
-                    Take(lambda mr, state: (local_set("f", False), state)),
+  parser.add_option("--f-false",
+                    Take.from_func(lambda: local_set("f", False)),
                     "set f to false")
-  parser.add_option(
-      "f|no-f",
-      Take(lambda mr, state: (local_set("f", mr.match_arg().startswith("f")), state)),
-      "f or not")
   import re
   parser.add_option(
       value().apply(lambda v: re.match("^[0-9]+$", v) and MATCH_POSITION),
-      Take(lambda mr, state: (local_set("a", int(mr.match_arg())), state)),
+      Take(lambda mr: TakeResult(_=local_set("a", int(mr.match_arg())), state=mr.state)),
       Document("INT", "set int value"))
   parser.add_option(
-      value().apply(lambda v: re.match("^-+value-[0-9]+$", v) and MATCH_UNIQUE),
-      Take(lambda mr, state: (local_set("a", int(mr.match_arg()[6:])), state)),
+      value().apply(lambda v: re.match("^-+value-[0-9]+$", v) and MATCH_EXACT),
+      Take(lambda mr: TakeResult(_=local_set("a", int(mr.match_arg()[6:])), state=mr.state)),
       Document("--value-[0-9]+", "set int value"))
   def clear(L):
     while L: L.remove(L[0])
   parser.add_option(
-      "clear-vs",
+      "--clear-vs",
       Take.from_func(lambda: clear(vs)),
       "clear vs")
   parser.add_option(
-      lambda state: (MatchResult(0, state), state),
-      None,
+      lambda state: MatchResult(priority=0, state=state),
+      Take(None),
       Document("help message", "Not a option, just print a help message. This"
                " test very long help message. A very long message should be"
                " splited and formated to fixed width"))
@@ -610,11 +718,11 @@ if __name__ == "__main__":
   sub.toggle()
   def sub_print(a):
     print "sub arg", a
-  sub.add_option("a", Take.from_func(sub_print), "ARG::arg print")
-  sub.add_option("b", Take.from_func(sub_print), "ARG::arg print")
-  parser.add_option(value().apply(lambda s: s == "sub" and MATCH_UNIQUE or MATCH_NO),
+  sub.add_option("-a A", Take.from_func(sub_print), "arg print")
+  sub.add_option("-b B", Take.from_func(sub_print), "arg print")
+  parser.add_option(value().apply(lambda s: s == "sub" and MATCH_EXACT or MATCH_NO),
                     Take.from_func(lambda: sub.toggle()), "toggle active sub")
-  sub.add_option(value().apply(lambda s: s == '--' and MATCH_UNIQUE or MATCH_NO),
+  sub.add_option(value().apply(lambda s: s == '--' and MATCH_EXACT or MATCH_NO),
                  Take.from_func(lambda: sub.toggle()),
                  "disable sub", prefix="--")
   parser.add_parser(sub, 1)
